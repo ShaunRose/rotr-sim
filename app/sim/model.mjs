@@ -2,13 +2,20 @@ import { Ship } from "../../vendor/vessel.mjs";
 
 export const KNOT = 1852 / 3600;
 export const STEP = 1 / 30;
-export const WORLD = { width: 1200, height: 800 };
-export const hull = { length: 20, beam: 6, depth: 4, draft: 1.5 };
+export const WORLD = { width: 4000, height: 4000 };
+/** Scenario metadata is kept with the encounter definition for future scenario selection. */
+export const scenario = {
+  id: "open-water-crossing",
+  title: "Open-water crossing",
+  description: "Two power-driven vessels approach an unaltered crossing at 20 kt. Initial radar contact precedes visual detection.",
+};
+/** Representative modern guided-missile destroyer dimensions, in metres. */
+export const hull = { length: 155, beam: 20, depth: 13, draft: 6.5 };
 
 /** Build a simple rectangular displacement hull using Vessel.js. */
 export function createVessel() {
   const ship = new Ship({
-    attributes: { name: "Research launch" },
+    attributes: { name: "Guided-missile destroyer" },
     designState: { calculationParameters: {}, objectOverrides: {} },
     structure: {
       hull: {
@@ -28,13 +35,13 @@ export function initialState() {
   return {
     time: 0,
     collision: /** @type {{ time: number } | null} */ (null),
-    own: { x: 360, y: 240, heading: 0, speed: 6, rudder: 0, trail: [[360, 240]] },
-    target: { x: 660, y: 540, heading: 270, speed: 6, rudder: 0, trail: [[660, 540]] },
+    own: { x: 1150, y: 1150, heading: 0, speed: 20, rudder: 0, trail: [[1150, 1150]] },
+    target: { x: 2850, y: 2850, heading: 270, speed: 20, rudder: 0, trail: [[2850, 2850]] },
   };
 }
 
 /**
- * Test the horizontal 20 x 6 m hull footprints using the separating axis theorem.
+ * Test the horizontal warship hull footprints using the separating axis theorem.
  * Edge contact counts as a collision. Visual wave pitch/roll do not change the footprint.
  * @param {{ x: number, y: number, heading: number }} a
  * @param {{ x: number, y: number, heading: number }} b

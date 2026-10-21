@@ -1,23 +1,29 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { STEP } from "./model.mjs";
+import { initialState, STEP } from "./model.mjs";
 import { createSimulation, advanceSimulation, defaultSettings, observe, emitSignal } from "./watchkeeping.mjs";
 import { sensorFrame as projectFrame, sensorPresentation as projectPresentation, defaultOverlays } from "./sensor-view.mjs";
 const allEnabled = Object.fromEntries(Object.keys(defaultOverlays).map(key => [key, true]));
 const sensorFrame = (watch, settings, time, enabled = allEnabled) => projectFrame(watch, settings, time, enabled);
 const sensorPresentation = (state, view, enabled = allEnabled) => projectPresentation(state, view, enabled);
-test("all overlays start disabled without disabling detection equipment", () => {
+test("lookout, radar, and sound overlays start enabled without enabling other overlays", () => {
   const state = createSimulation();
   const frame = projectPresentation(state, "own").frames[0];
-  assert.ok(Object.values(defaultOverlays).every(value => value === false));
-  assert.equal(frame.visual, null); assert.equal(frame.radar, null);
-  assert.equal(frame.visibility, null); assert.equal(frame.radarEnabled, false);
-  assert.ok(state.bridge.own.visual); assert.ok(state.bridge.own.radar);
+  assert.equal(defaultOverlays.visual, true);
+  assert.equal(defaultOverlays.radar, true);
+  assert.equal(defaultOverlays.sound, true);
+  assert.ok(Object.entries(defaultOverlays).filter(([key]) => !["visual", "radar", "sound"].includes(key)).every(([, value]) => value === false));
+  assert.equal(frame.visual, null); assert.ok(frame.radar);
+  assert.equal(frame.visibility, 2000); assert.equal(frame.radarEnabled, true);
+  assert.equal(state.bridge.own.visual, null); assert.ok(state.bridge.own.radar);
 });
-const command = { speed: 6, rudder: 0 };
+const command = { speed: 20, rudder: 0 };
 function run(state, seconds, settings) {
   for (let i = 0; i < Math.round(seconds / STEP); i++) state = advanceSimulation(state, command, STEP, settings);
   return state;
+}
+function closeEncounter(state) {
+  return { ...state, target: { ...state.target, x: state.own.x + 500, y: state.own.y } };
 }
 
 test("receiver views draw only the selected live hull; observer mode includes both", () => {
@@ -42,7 +48,7 @@ test("AIS marker uses the delayed broadcast location, not the current vessel", (
   const settings = defaultSettings();
   const state = run(createSimulation(settings), 3, settings);
   const frame = sensorPresentation(state, "own").frames[0];
-  assert.equal(frame.ais.point.x, 660);
+  assert.equal(frame.ais.point.x, initialState().target.x);
   assert.ok(state.target.x < frame.ais.point.x);
   assert.ok(frame.ais.age > 2.9);
 });
@@ -93,11 +99,11 @@ test("stale samples and reports disappear rather than being shown as current con
 
 test("received horn overlays contain direction only, never emitter position or identity", () => {
   const settings = defaultSettings();
-  let state = emitSignal(createSimulation(settings), settings, "own", "horn");
+  let state = emitSignal(closeEncounter(createSimulation(settings)), settings, "own", "horn");
   assert.equal(sensorPresentation(state, "target").emissions.length, 0);
   assert.equal(sensorPresentation(state, "observer").emissions.length, 1);
   assert.equal(sensorPresentation(state, "target").frames[0].hearing.length, 0);
-  state = run(state, 2, settings);
+  state = run(state, 3, settings);
   const heard = sensorPresentation(state, "target").frames[0].hearing[0];
   assert.ok(heard); assert.equal(heard.from, null);
   assert.equal(Object.hasOwn(heard, "originX"), false);
@@ -109,7 +115,7 @@ test("VHF receiver label appears after reception and signal overlays expire on s
   const settings = defaultSettings();
   let state = emitSignal(createSimulation(settings), settings, "own", "vhf");
   assert.equal(sensorPresentation(state, "target").frames[0].vhf.length, 0);
-  state = run(state, 2, settings);
+  state = run(state, 3, settings);
   const message = sensorPresentation(state, "target").frames[0].vhf[0];
   assert.equal(message.message, "Please state your intentions.");
   assert.equal(message.bearing, null);
@@ -120,8 +126,8 @@ test("VHF receiver label appears after reception and signal overlays expire on s
 
 test("disabling receiving equipment suppresses received overlays immediately", () => {
   const settings = defaultSettings();
-  let state = emitSignal(createSimulation(settings), settings, "own", "horn");
-  state = run(state, 2, settings);
+  let state = emitSignal(closeEncounter(createSimulation(settings)), settings, "own", "horn");
+  state = run(state, 3, settings);
   assert.equal(sensorPresentation(state, "target").frames[0].hearing.length, 1);
   settings.equipment.target.hearing = false;
   state = { ...state, bridge: observe(state, state.bridge, settings, command) };

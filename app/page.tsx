@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { createVessel, encounter, hull, STEP, WORLD } from "./sim/model.mjs";
+import { createVessel, encounter, hull, scenario, STEP, WORLD } from "./sim/model.mjs";
 import { createSimulation, advanceSimulation, observe, defaultSettings, emitSignal, type Settings, type ShipId } from "./sim/watchkeeping.mjs";
 import { rangeText, feet, longTons, bearingText, tcpaText } from "./sim/units.mjs";
 import Watchkeeping from "./sim/watchkeeping-panel";
@@ -13,7 +13,7 @@ const OceanScene = dynamic(() => import("./sim/ocean-scene"), { ssr: false, load
 export default function Home() {
   const [state, setState] = useState(createSimulation);
   const [running, setRunning] = useState(false);
-  const [speed, setSpeed] = useState(6);
+  const [speed, setSpeed] = useState(20);
   const [rudder, setRudder] = useState(0);
   const [rate, setRate] = useState(1);
   const [settings, setSettings] = useState(defaultSettings);
@@ -47,8 +47,9 @@ export default function Home() {
     return () => cancelAnimationFrame(frame);
   }, [running]);
   const reset = () => {
-    setRunning(false); live.current = createSimulation(settingsRef.current); setState(live.current);
-    setSpeed(6); setRudder(0);
+    setRunning(false); command.current = { speed: 20, rudder: 0, rate };
+    live.current = createSimulation(settingsRef.current); setState(live.current);
+    setSpeed(20); setRudder(0);
   };
   const changeSettings = (next: Settings) => {
     settingsRef.current = next;
@@ -70,22 +71,20 @@ export default function Home() {
       <Link className="brand" href="/" aria-label="ROTR simulation home"><span className="brand-mark">R</span><span>ROTR<span className="brand-light"> / SIM</span></span></Link>
       <span className="environment"><i /> LOCAL SIMULATION</span>
     </header>
-    <section className="heading"><div><p className="eyebrow">NAVIGATION LAB / SCENARIO 001</p><h1>Crossing paths.</h1><p>Take the helm. Navigate a two-vessel encounter in a living 3D ocean.</p></div><div className="engine-badge">POWERED BY <strong>Vessel.js</strong></div></section>
+    <section className="heading"><div><p className="eyebrow">NAVIGATION LAB / SCENARIO 001</p><h1>{scenario.title}</h1><p>{scenario.description}</p></div><div className="engine-badge">POWERED BY <strong>Vessel.js</strong></div></section>
     <div className="workspace">
       <section className="chart-panel" aria-label="3D ocean simulation">
-        <div className="chart-toolbar"><span><i className={running ? "dot active" : "dot"} />{state.collision ? "COLLISION DETECTED" : running ? "SIMULATION RUNNING" : "SIMULATION PAUSED"}</span><span className="clock">T + {clock}</span></div>
+        <div className="chart-toolbar"><span className="clock">T + {clock}</span><div className="chart-actions"><button className="primary" disabled={!vessel || !!error || !!state.collision} onClick={() => setRunning(!running)}>{running ? "Pause" : "Run"}</button><button onClick={reset}>Reset</button><label className="rate">Time scale <select value={rate} onChange={e => setRate(Number(e.target.value))}><option value="1">1x</option><option value="5">5x</option><option value="10">10x</option><option value="20">20x</option></select></label></div></div>
         {state.collision && <div className="collision-banner" role="alert"><div><strong>Collision detected</strong><p>Hull contact at {state.collision.time.toFixed(1)} s. Simulation paused. Reset to try another maneuver.</p></div><button onClick={reset}>Restart encounter</button></div>}
         <div className="chart-wrap">
           <OceanScene simulation={live} snapshot={state} settings={settings} onSettings={changeSettings} onSignal={signal} />
-          <div className="chart-legend"><span><i style={{ background: "#68e0c3" }} /> Your vessel</span><span><i style={{ background: "#f7be63" }} /> Target vessel</span><span>Choose a sensor view in the scene</span></div>
         </div>
-        <div className="transport"><div className="transport-buttons"><button className="primary" disabled={!vessel || !!error || !!state.collision} onClick={() => setRunning(!running)}>{state.collision ? "Collision - reset to restart" : running ? "Pause simulation" : "Run simulation"}</button><button onClick={reset}>Reset</button></div><label className="rate">Time scale <select value={rate} onChange={e => setRate(Number(e.target.value))}><option value="1">1x</option><option value="5">5x</option><option value="10">10x</option></select></label></div>
       </section>
       <aside>
-        <section className="panel"><div className="panel-title"><h2>Helm control</h2><span className="tag">MANUAL</span></div><p className="muted">Naval vessel / own ship</p>
+        <section className="panel"><div className="panel-title"><h2>Ship 1 manual controls</h2><span className="tag">MANUAL</span></div><p className="muted">Naval vessel / Ship 01</p>
           <div className="readouts"><div><strong>{state.own.speed.toFixed(1)}<small>kt</small></strong><span>Speed over water</span></div><div><strong>{bearingText(state.own.heading)}</strong><span>Heading</span></div></div>
-          <label className="slider-label" htmlFor="speed">Target speed <strong>{speed} kt</strong></label><input id="speed" disabled={!!state.collision} type="range" min="0" max="12" step="0.5" value={speed} onChange={e => setSpeed(Number(e.target.value))} /><div className="range-labels"><span>STOP</span><span>12 KT</span></div>
-          <label className="slider-label" htmlFor="rudder">Rudder <strong>{rudder === 0 ? "Amidships" : `${Math.abs(rudder)}° ${rudder < 0 ? "port" : "starboard"}`}</strong></label><input id="rudder" disabled={!!state.collision} type="range" min="-35" max="35" value={rudder} onChange={e => setRudder(Number(e.target.value))} /><div className="range-labels"><span>PORT</span><button className="text-button" disabled={!!state.collision} onClick={() => setRudder(0)}>Center rudder</button><span>STARBOARD</span></div>
+          <label className="slider-label" htmlFor="speed">Target speed <strong>{speed} kt</strong></label><input id="speed" disabled={!!state.collision} type="range" min="0" max="30" step="0.5" value={speed} onChange={e => setSpeed(Number(e.target.value))} /><div className="range-labels"><span>STOP</span><span>30 KT</span></div>
+          <label className="slider-label" htmlFor="rudder">Rudder <strong>{rudder === 0 ? "Amidships" : `${Math.abs(rudder)}° ${rudder < 0 ? "port" : "starboard"}`}</strong></label><input id="rudder" disabled={!!state.collision} type="range" min="-35" max="35" value={rudder} onChange={e => setRudder(Number(e.target.value))} /><div className="range-labels"><span>PORT</span><button className="text-button" disabled={!!state.collision} onClick={() => setRudder(0)}>Center rudder</button><span>STARBOARD</span></div><div className="helm-actions"><button disabled={!!state.collision} onClick={() => signal("own", "horn")}>Sound Ship 1 horn</button></div>
         </section>
         <section className="panel"><div className="panel-title"><h2>Encounter / ground truth</h2><span className={`tag ${state.collision ? "danger" : close ? "amber" : ""}`}>{state.collision ? "COLLISION" : close ? "CLOSE APPROACH" : "MONITORING"}</span></div><dl><div><dt>Target range</dt><dd>{rangeText(approach.range)}</dd></div><div><dt>Closest approach</dt><dd>{rangeText(approach.dcpa)}</dd></div><div><dt>Time to closest approach</dt><dd>{approach.tcpa > 0 ? tcpaText(approach.tcpa) : "Now / opening"}</dd></div></dl><p className="note">Prediction assumes both vessels hold their present course and speed.</p></section>
         <section className="panel hull-panel"><div className="panel-title"><h2>Vessel model</h2><span className="tag">VESSEL.JS</span></div><dl><div><dt>Length / beam</dt><dd>{feet(hull.length).toFixed(1)} / {feet(hull.beam).toFixed(1)} ft</dd></div><div><dt>Design draft</dt><dd>{feet(hull.draft).toFixed(1)} ft</dd></div><div><dt>Displacement</dt><dd>{vessel ? `${longTons(vessel.displacement).toFixed(1)} LT` : "Loading..."}</dd></div></dl><p className="note">Box hull hydrostatics from Vessel.js. Motion uses a simplified steering model.</p></section>

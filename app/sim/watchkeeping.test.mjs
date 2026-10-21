@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { STEP } from "./model.mjs";
 import { createSimulation, advanceSimulation, defaultSettings, observe, emitSignal, LOG_LIMIT } from "./watchkeeping.mjs";
 
-const command = { speed: 6, rudder: 0 };
+const command = { speed: 20, rudder: 0 };
 function run(state, seconds, settings, control = command) {
   for (let i = 0; i < Math.round(seconds / STEP); i++) state = advanceSimulation(state, control, STEP, settings);
   return state;
@@ -14,8 +14,8 @@ function disable(settings, id) {
 
 test("each ship starts with independent observations and no instantaneous radar velocity", () => {
   const state = createSimulation();
-  assert.ok(state.bridge.own.visual.relative > 0);
-  assert.ok(state.bridge.target.visual.relative < 0);
+  assert.ok(state.bridge.own.radar);
+  assert.ok(state.bridge.target.radar);
   assert.equal(state.bridge.own.track, null);
   assert.equal(state.bridge.target.track, null);
   assert.notEqual(state.bridge.own.logs, state.bridge.target.logs);
@@ -66,7 +66,7 @@ test("fog limits visual observations while retaining radar measurements", () => 
 });
 
 test("night lookout reports the appropriate opposite sidelights", () => {
-  const settings = defaultSettings(); settings.night = true;
+  const settings = defaultSettings(); settings.night = true; settings.visibility = 6000;
   const state = createSimulation(settings);
   assert.ok(state.bridge.own.visual.aspect.includes("red port"));
   assert.ok(state.bridge.target.visual.aspect.includes("green starboard"));
@@ -107,7 +107,7 @@ test("horn and radio requests are delivered to the other ship after propagation 
   let state = emitSignal(createSimulation(settings), settings, "own", "horn");
   state = emitSignal(state, settings, "own", "vhf");
   assert.equal(state.bridge.target.logs.some(log => log.source === "HEARING"), false);
-  state = run(state, 2, settings);
+  state = run(state, 8, settings);
   assert.ok(state.bridge.target.logs.some(log => log.source === "HEARING" && log.message.includes("No range")));
   assert.ok(state.bridge.target.logs.some(log => log.source === "VHF" && log.message.includes("No maneuver agreement")));
   assert.equal(state.bridge.own.logs.some(log => log.source === "HEARING"), false);
@@ -125,7 +125,7 @@ test("disabled receiving equipment does not receive horn or VHF messages", () =>
 
 test("collision is recorded once in each evaluator log, and reset clears history", () => {
   const settings = defaultSettings();
-  const state = run(createSimulation(settings), 100, settings);
+  const state = run(createSimulation(settings), 600, settings);
   assert.ok(state.collision);
   for (const watch of [state.bridge.own, state.bridge.target]) assert.equal(watch.logs.filter(log => log.source === "EVALUATOR").length, 1);
   assert.equal(advanceSimulation(state, command, STEP, settings), state);
@@ -140,21 +140,21 @@ test("deterministic observations and bounded histories survive a long run", () =
   const first = run(createSimulation(settings), 8, settings);
   const second = run(createSimulation(settings), 8, settings);
   assert.deepEqual(first.bridge, second.bridge);
-  const state = run(createSimulation(settings), 400, settings, { speed: 6, rudder: 35 });
+  const state = run(createSimulation(settings), 400, settings, { speed: 20, rudder: 35 });
   assert.equal(state.collision, null);
   assert.equal(state.bridge.own.logs.length, LOG_LIMIT);
   assert.equal(state.bridge.target.logs.length, LOG_LIMIT);
 });
 
 test("bearing trends remain numeric observations when radar is disabled", () => {
-  const settings = defaultSettings(); settings.equipment.own.radar = false;
+  const settings = defaultSettings(); settings.visibility = 6000; settings.equipment.own.radar = false;
   const state = run(createSimulation(settings), 12, settings);
   assert.equal(state.bridge.own.track, null);
   assert.ok(state.bridge.own.logs.some(log => log.source === "BEARING TREND"));
 });
 
 test("logs contain observations and actual commands, with no JavaScript rule decisions", () => {
-  const settings = defaultSettings();
+  const settings = defaultSettings(); settings.visibility = 6000;
   const state = run(createSimulation(settings), 30, settings);
   for (const watch of [state.bridge.own, state.bridge.target]) {
     assert.equal(Object.hasOwn(watch, "decision"), false);

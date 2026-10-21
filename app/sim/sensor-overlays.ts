@@ -1,12 +1,13 @@
 import { rangeText, bearingText, tcpaText } from "./units.mjs";
 import { sensorColors } from "./sensor-colors";
+import { WORLD } from "./model.mjs";
 import * as THREE from "three";
 import { sensorPresentation } from "./sensor-view.mjs";
 
 type Presentation = ReturnType<typeof sensorPresentation>;
 type Frame = Presentation["frames"][number];
 type Point = { x: number; y: number };
-const world = (p: Point, height = 5) => new THREE.Vector3(p.x - 600, height, 400 - p.y);
+const world = (p: Point, height = 5) => new THREE.Vector3(p.x - WORLD.width / 2, height, WORLD.height / 2 - p.y);
 
 function line(color: THREE.ColorRepresentation, dashed = false) {
   const material = dashed ? new THREE.LineDashedMaterial({ color, dashSize: 7, gapSize: 5, transparent: true, opacity: 0.75 })
@@ -36,7 +37,7 @@ function circle(color: THREE.ColorRepresentation, radius = 1, opacity = 0.4) {
 }
 
 function label(color: THREE.ColorRepresentation, offset: number) {
-  const canvas = document.createElement("canvas"); canvas.width = 768; canvas.height = 80;
+  const canvas = document.createElement("canvas"); canvas.width = 1024; canvas.height = 80;
   const context = canvas.getContext("2d");
   const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace;
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, sizeAttenuation: false }));
@@ -48,18 +49,21 @@ function label(color: THREE.ColorRepresentation, offset: number) {
     if (!context || last === cacheKey) return;
     last = cacheKey;
     context.clearRect(0, 0, 768, 80);
-    context.fillStyle = "rgba(5, 19, 28, .88)"; context.fillRect(0, 0, 768, 80);
     context.fillStyle = `#${new THREE.Color(tint).getHexString()}`;
-    context.font = "42px monospace"; context.fillText(message, 12, 49, 744);
+    context.font = "700 34px monospace";
+    context.lineWidth = 5;
+    context.strokeStyle = "rgba(3, 15, 22, .78)";
+    context.strokeText(message, 12, 49, 1000);
+    context.fillText(message, 12, 49, 1000);
     texture.needsUpdate = true;
   } };
 }
 
 function receiverObjects(id: string) {
   const root = new THREE.Group();
-  const boundary = circle(sensorColors.visual, 1, 0.25);
-  const radarRings = [250, 500].map(radius => circle(sensorColors.radar, radius, 0.22));
-  const sweep = new THREE.Mesh(new THREE.CircleGeometry(500, 32, 0, 0.24), new THREE.MeshBasicMaterial({ color: sensorColors.radar, transparent: true, opacity: 0.07, depthWrite: false, side: THREE.DoubleSide }));
+  const boundary = circle(sensorColors.visual, 1, 0.58);
+  const radarRings = [6000].map(radius => circle(sensorColors.radar, radius, 0.34));
+  const sweep = new THREE.Mesh(new THREE.CircleGeometry(6000, 64, 0, 0.24), new THREE.MeshBasicMaterial({ color: sensorColors.radar, transparent: true, opacity: 0.055, depthWrite: false, side: THREE.DoubleSide }));
   sweep.rotation.x = -Math.PI / 2;
   const visualLine = line(sensorColors.visual);
   const visualMarker = circle(sensorColors.visual, 9, 0.9);
@@ -88,13 +92,13 @@ function receiverObjects(id: string) {
     sweep.visible = frame.radarEnabled; sweep.position.copy(world(origin, 3)); sweep.rotation.z = -time * Math.PI;
     visualLine.visible = visualMarker.visible = !!frame.visual;
     if (frame.visual) { setLine(visualLine, [frame.visual.origin, frame.visual.point], 6); visualMarker.position.copy(world(frame.visual.point, 6)); }
-    showLabel("visual", !!frame.visual, frame.visual?.point ?? origin, `${prefix} LOOKOUT · ${frame.visual?.aspect === "visual contact" ? "contact" : frame.visual?.aspect.replace("masthead white + ", "WH + ").replace(" sidelight", "") ?? ""}`);
+    showLabel("visual", !!frame.visual, frame.visual?.point ?? origin, `(detected by Ship ${prefix} using LOOKOUT)`,);
     echo.visible = uncertainty.visible = !!frame.radar;
     if (frame.radar) {
       echo.position.copy(world(frame.radar.point, 6)); echo.material.opacity = Math.max(0.2, 1 - frame.radar.age / 6);
       uncertainty.position.copy(world(frame.radar.point, 6)); uncertainty.scale.setScalar(frame.radar.errorRadius);
     }
-    showLabel("radar", !!frame.radar, frame.radar?.point ?? origin, `${prefix} RADAR · ${frame.radar?.age.toFixed(1)}s`);
+    showLabel("radar", !!frame.radar, frame.radar?.point ?? origin, `(detected by Ship ${prefix} using RADAR)`);
     ais.visible = !!frame.ais;
     if (frame.ais) { ais.position.copy(world(frame.ais.point, 6)); ais.rotation.y = -frame.ais.heading * Math.PI / 180; ais.material.opacity = frame.ais.opacity; }
     showLabel("ais", !!frame.ais, frame.ais?.point ?? origin, `${prefix} AIS · ${frame.ais?.age.toFixed(1)}s old`, frame.ais?.opacity ?? 1);

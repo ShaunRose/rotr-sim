@@ -73,7 +73,7 @@ function radarTrack(watch) {
 /** Update independent receiver histories at simulated device intervals. @param {ReturnType<typeof initialState>} state @param {Bridge} old @param {Settings} settings */
 export function observe(state, old, settings, command) {
   const time = state.time;
-  const bridge = { ...old, settings: structuredClone(settings), signals: old.signals.filter(signal => signal.delivery > time), emissions: old.emissions.filter(signal => time - signal.sent <= 6) };
+  const bridge = { ...old, settings: structuredClone(settings), signals: old.signals.filter(signal => signal.delivery > time), emissions: old.emissions.filter(signal => signal.kind === "horn" ? time <= signal.delivery : time - signal.sent <= 6) };
   for (const id of ids) {
     const other = id === "own" ? "target" : "own";
     const previous = old[id];
@@ -150,7 +150,7 @@ export function observe(state, old, settings, command) {
       }
     }
     watch.receivedSignals = watch.receivedSignals.slice(-20);
-    const control = id === "own" ? `Manual helm target: ${command.speed.toFixed(1)} kt, rudder ${command.rudder}°.` : "Scenario controller holds 270.0°T at 6 kt.";
+    const control = id === "own" ? `Manual helm target: ${command.speed.toFixed(1)} kt, rudder ${command.rudder}°.` : "Scenario controller holds 270.0°T at 20 kt.";
     if (control !== watch.control) { log(watch, time, "CONTROL", control, "control"); watch.control = control; }
     if (state.collision && !watch.collisionLogged) {
       log(watch, time, "EVALUATOR", "Ground-truth hull contact detected. Simulation clock and controls paused; reset required.", "system");
@@ -164,7 +164,7 @@ export function observe(state, old, settings, command) {
 export function createSimulation(settings = defaultSettings()) {
   const state = initialState();
   const bridge = { own: emptyWatch("own"), target: emptyWatch("target"), settings: structuredClone(settings), signals: /** @type {Signal[]} */ ([]), emissions: /** @type {Signal[]} */ ([]) };
-  return { ...state, bridge: observe(state, bridge, settings, { speed: 6, rudder: 0 }) };
+  return { ...state, bridge: observe(state, bridge, settings, { speed: 20, rudder: 0 }) };
 }
 
 /** Keep sensor clocks on simulation time, including collision pause. */
@@ -187,6 +187,6 @@ export function emitSignal(state, settings, from, kind) {
     delivery: state.time + (kind === "horn" ? range / 343 : 1),
     bearing: (bearing(state[from].x - state[to].x, state[from].y - state[to].y) + 10 * noise(state.time, 1) + 360) % 360 };
   bridge.emissions = [...bridge.emissions.slice(-19), event];
-  if (range <= (kind === "horn" ? 1000 : 10000)) bridge.signals.push(event);
+  if (range <= (kind === "horn" ? 6000 : 10000)) bridge.signals.push(event);
   return { ...state, bridge };
 }

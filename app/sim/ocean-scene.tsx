@@ -9,7 +9,7 @@ import { Sky } from "three/addons/objects/Sky.js";
 import { rangeText } from "./units.mjs";
 import { sensorColors } from "./sensor-colors";
 import { closedHull } from "./naval-hull.mjs";
-import { hull } from "./model.mjs";
+import { hull, WORLD } from "./model.mjs";
 import { createSimulation, type Settings, type ShipId } from "./watchkeeping.mjs";
 import { sensorPresentation, defaultOverlays, type SensorView, type OverlayToggles } from "./sensor-view.mjs";
 import { createSensorOverlays } from "./sensor-overlays";
@@ -57,48 +57,52 @@ function makeBoat(color: number, label: string) {
   const deck = new THREE.MeshStandardMaterial({ color: 0x47585b, roughness: 0.9 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x17292e, roughness: 0.6 });
   const glass = new THREE.MeshStandardMaterial({ color: 0x254d60, roughness: 0.12, metalness: 0.55 });
+  const lengthScale = hull.length / 20;
+  const heightScale = hull.depth / 4;
   const addBox = (w: number, h: number, d: number, x: number, y: number, z: number, material: THREE.Material) => {
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
     mesh.position.set(x, y, z); visual.add(mesh); return mesh;
   };
+  const addDetail = (w: number, h: number, d: number, x: number, y: number, z: number, material: THREE.Material) => addBox(w * lengthScale, h * heightScale, d * lengthScale, x * lengthScale, y * heightScale, z * lengthScale, material);
   addBox(hull.beam, hull.draft, hull.length, 0, -hull.draft / 2, 0, red);
   addBox(hull.beam, hull.depth - hull.draft, hull.length, 0, (hull.depth - hull.draft) / 2, 0, paint);
-  addBox(6.08, 0.3, 20.08, 0, 0.22, 0, dark);
-  addBox(5.8, 0.15, 19.8, 0, 2.55, 0, deck);
-  addBox(4.6, 2.5, 6.6, 0, 3.86, -1.8, white);
-  addBox(4.95, 0.2, 7, 0, 5.2, -1.8, white);
-  addBox(3.9, 1.1, 0.06, 0, 4.1, -5.12, glass);
-  addBox(0.06, 1.1, 4.5, -2.32, 4.1, -2, glass);
-  addBox(0.06, 1.1, 4.5, 2.32, 4.1, -2, glass);
-  for (const x of [-1.1, 0, 1.1]) addBox(0.09, 1.2, 0.09, x, 4.1, -5.17, white);
-  addBox(1.4, 2.1, 1.7, 0, 3.65, 3.2, paint);
-  addBox(1.5, 0.4, 1.8, 0, 4.8, 3.2, dark);
-  addBox(0.15, 3.4, 0.15, 0, 6.9, -1.4, white);
-  addBox(3.2, 0.12, 0.2, 0, 8, -1.4, white);
-  addBox(1.7, 0.18, 0.4, 0, 8.65, -1.4, dark);
+  addDetail(6.08, 0.3, 20.08, 0, 0.22, 0, dark);
+  addDetail(5.8, 0.15, 19.8, 0, 2.55, 0, deck);
+  addDetail(4.6, 2.5, 6.6, 0, 3.86, -1.8, white);
+  addDetail(4.95, 0.2, 7, 0, 5.2, -1.8, white);
+  addDetail(3.9, 1.1, 0.06, 0, 4.1, -5.12, glass);
+  addDetail(0.06, 1.1, 4.5, -2.32, 4.1, -2, glass);
+  addDetail(0.06, 1.1, 4.5, 2.32, 4.1, -2, glass);
+  for (const x of [-1.1, 0, 1.1]) addDetail(0.09, 1.2, 0.09, x, 4.1, -5.17, white);
+  addDetail(1.4, 2.1, 1.7, 0, 3.65, 3.2, paint);
+  addDetail(1.5, 0.4, 1.8, 0, 4.8, 3.2, dark);
+  addDetail(0.15, 3.4, 0.15, 0, 6.9, -1.4, white);
+  addDetail(3.2, 0.12, 0.2, 0, 8, -1.4, white);
+  addDetail(1.7, 0.18, 0.4, 0, 8.65, -1.4, dark);
   for (const side of [-1, 1]) {
-    for (let z = -9; z <= 9; z += 3) addBox(0.08, 0.9, 0.08, side * 2.75, 3.05, z, white);
-    addBox(0.08, 0.08, 18, side * 2.75, 3.5, 0, white);
+    for (let z = -9; z <= 9; z += 3) addDetail(0.08, 0.9, 0.08, side * 2.75, 3.05, z, white);
+    addDetail(0.08, 0.08, 18, side * 2.75, 3.5, 0, white);
     for (const z of [-7, 0, 7]) {
       const tyre = new THREE.Mesh(new THREE.TorusGeometry(0.45, 0.16, 8, 16), dark);
-      tyre.rotation.y = Math.PI / 2; tyre.position.set(side * 3.1, 1.2, z); visual.add(tyre);
+      tyre.scale.set(lengthScale, heightScale, lengthScale); tyre.rotation.y = Math.PI / 2; tyre.position.set(side * 3.1 * lengthScale, 1.2 * heightScale, z * lengthScale); visual.add(tyre);
     }
     const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 8), new THREE.MeshBasicMaterial({ color: side > 0 ? 0x36ff88 : 0xff4433 }));
-    lamp.position.set(side * 2.0, 2.0, -2.0); body.add(lamp);
+    lamp.position.set(side * 2.0 * lengthScale, 2.0 * heightScale, -2.0 * lengthScale); body.add(lamp);
   }
   const canvas = document.createElement("canvas");
   canvas.width = 512; canvas.height = 96;
   const ctx = canvas.getContext("2d");
   if (ctx) {
-    ctx.fillStyle = "rgba(8, 27, 35, 0.85)"; ctx.fillRect(0, 0, 512, 96);
     ctx.fillStyle = `#${color.toString(16).padStart(6, "0")}`;
-    ctx.font = "600 32px Arial"; ctx.textAlign = "center"; ctx.fillText(label, 256, 59);
+    ctx.font = "700 40px Arial"; ctx.textAlign = "center";
+    ctx.lineWidth = 6; ctx.strokeStyle = "rgba(3, 15, 22, .82)";
+    ctx.strokeText(label, 256, 59); ctx.fillText(label, 256, 59);
   }
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true }));
   sprite.material.sizeAttenuation = false;
-  sprite.position.y = 10; sprite.scale.set(0.13, 0.024, 1); root.add(sprite);
+  sprite.position.y = hull.depth + 7; sprite.scale.set(0.13, 0.024, 1); root.add(sprite);
   const wake = new THREE.Mesh(new THREE.PlaneGeometry(7, 38), new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, side: THREE.DoubleSide,
     vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
@@ -110,7 +114,7 @@ function makeBoat(color: number, label: string) {
       gl_FragColor = vec4(0.78, 0.94, 0.93, edge * fade * foam * 0.22);
     }`,
   }));
-  wake.rotation.x = -Math.PI / 2; wake.position.set(0, 0.12, 27); root.add(wake);
+  wake.rotation.x = -Math.PI / 2; wake.scale.set(lengthScale, 1, lengthScale); wake.position.set(0, 0.12, 27 * lengthScale); root.add(wake);
   const outline = new THREE.LineSegments(
     new THREE.EdgesGeometry(new THREE.BoxGeometry(hull.beam + 0.2, hull.depth + 0.2, hull.length + 0.2)),
     new THREE.LineBasicMaterial({ color: 0xff5544, transparent: true, opacity: 0.95 }),
@@ -252,7 +256,7 @@ export default function OceanScene({ simulation, snapshot, settings, onSettings,
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.minDistance = 22;
-    controls.maxDistance = 1800;
+    controls.maxDistance = 9000;
     controls.maxPolarAngle = Math.PI / 2 - 0.035;
     controls.target.set(0, 0, 0);
     scene.add(new THREE.HemisphereLight(0xc7e9ff, 0x4e676c, 2.6));
@@ -268,7 +272,7 @@ export default function OceanScene({ simulation, snapshot, settings, onSettings,
     sky.material.uniforms.sunPosition.value.copy(sun);
     scene.add(sky);
     const normals = normalTexture();
-    const water = new Water(new THREE.PlaneGeometry(6000, 6000, 384, 384), {
+    const water = new Water(new THREE.PlaneGeometry(14000, 14000, 384, 384), {
       textureWidth: 512, textureHeight: 512, waterNormals: normals,
       sunDirection: sun, sunColor: 0xffefdc, waterColor: 0x005b70,
       distortionScale: 3.5, fog: true,
@@ -292,8 +296,8 @@ export default function OceanScene({ simulation, snapshot, settings, onSettings,
         vec2 slope = waveAmplitude * vec2(0.065*cos(phase1) - 0.0133*cos(phase2), 0.025*cos(phase1) + 0.028*cos(phase2));
         vec3 surfaceNormal = normalize(noise.xzy * vec3(0.65, 1.0, 0.65) + vec3(-slope.x, 0.0, -slope.y));`);
     scene.add(water);
-    const own = makeBoat(0x68e0c3, "01 / OWN");
-    const target = makeBoat(0xf7be63, "02 / TARGET");
+    const own = makeBoat(0x68e0c3, "SHIP 01");
+    const target = makeBoat(0xf7be63, "SHIP 02");
     scene.add(own.root, target.root);
     let disposed = false;
     new GLTFLoader().load("/models/naval-battleship.glb", gltf => {
@@ -329,7 +333,7 @@ export default function OceanScene({ simulation, snapshot, settings, onSettings,
     let frame = 0, cameraRevision = -1, lastTrailTime = -1;
     const previousFocus = new THREE.Vector3();
     const focus = new THREE.Vector3();
-    const toWorld = (boat: State["own"]) => new THREE.Vector3(boat.x - 600, 0, 400 - boat.y);
+    const toWorld = (boat: State["own"]) => new THREE.Vector3(boat.x - WORLD.width / 2, 0, WORLD.height / 2 - boat.y);
     const draw = () => {
       const state = simulation.current;
       const time = state.time;
@@ -362,7 +366,7 @@ export default function OceanScene({ simulation, snapshot, settings, onSettings,
       const selected = display.current.view === "target" ? 1 : 0;
       const primary = positions[selected];
       const observed = sensorData.frames[0]?.knownTarget;
-      const secondary = display.current.view === "observer" ? positions[1] : observed ? new THREE.Vector3(observed.x - 600, 0, 400 - observed.y) : primary;
+      const secondary = display.current.view === "observer" ? positions[1] : observed ? new THREE.Vector3(observed.x - WORLD.width / 2, 0, WORLD.height / 2 - observed.y) : primary;
       focus.copy(request.mode === "follow" ? primary : primary.clone().add(secondary).multiplyScalar(0.5));
       if (request.revision !== cameraRevision) {
         const separation = primary.distanceTo(secondary);
@@ -378,13 +382,13 @@ export default function OceanScene({ simulation, snapshot, settings, onSettings,
       predictions.forEach((prediction, i) => { prediction.visible = sensorData.physicalShips.includes(i === 0 ? "own" : "target") && !state.collision; });
       if (Math.abs(time - lastTrailTime) >= 0.25 || time < lastTrailTime) {
         [state.own, state.target].forEach((boat, i) => {
-          const points = boat.trail.map(([x, y]) => new THREE.Vector3(x - 600, surface(x - 600, 400 - y, time, amplitude) + 0.2, 400 - y));
+          const points = boat.trail.map(([x, y]) => new THREE.Vector3(x - WORLD.width / 2, surface(x - WORLD.width / 2, WORLD.height / 2 - y, time, amplitude) + 0.2, WORLD.height / 2 - y));
           const old = trails[i].geometry;
           trails[i].geometry = new THREE.BufferGeometry().setFromPoints(points); old.dispose();
           const projected: THREE.Vector3[] = [];
           let x = boat.x, y = boat.y, heading = boat.heading;
           for (let step = 0; step <= 60; step++) {
-            projected.push(new THREE.Vector3(x - 600, surface(x - 600, 400 - y, time, amplitude) + 0.28, 400 - y));
+            projected.push(new THREE.Vector3(x - WORLD.width / 2, surface(x - WORLD.width / 2, WORLD.height / 2 - y, time, amplitude) + 0.28, WORLD.height / 2 - y));
             const dt = 1;
             const radians = heading * Math.PI / 180;
             x += Math.sin(radians) * boat.speed * 0.514444 * dt;
@@ -433,9 +437,9 @@ export default function OceanScene({ simulation, snapshot, settings, onSettings,
     <div className="ocean-toolbar" aria-label="Simulation view controls">
       <label><span>View</span><select aria-label="Sensor view" value={sensorView} onChange={e => { const view = e.target.value as SensorView; setSensorView(view); display.current = { ...display.current, view }; changeCamera("encounter"); }}><option value="observer">Observer · both ships</option><option value="own">Ship 01 · sensors</option><option value="target">Ship 02 · sensors</option></select></label>
       <label><span>Camera</span><select aria-label="Camera view" value={mode} onChange={e => changeCamera(e.target.value as CameraMode)}><option value="encounter">Overview</option><option value="follow">Follow vessel</option><option value="overhead">Overhead</option></select></label>
+      <div className="ocean-environment-inline"><label><span>Visibility</span><select aria-label="Detection visibility" value={settings.restricted ? "fog" : "clear"} disabled={!!snapshot.collision} onChange={e => onSettings({ ...settings, visibility: e.target.value === "fog" ? 150 : 2000, restricted: e.target.value === "fog" })}><option value="clear">Clear / {rangeText(2000)}</option><option value="fog">Fog / {rangeText(150)}</option></select></label><label><span>Light</span><select aria-label="Detection light conditions" value={settings.night ? "night" : "day"} disabled={!!snapshot.collision} onChange={e => onSettings({ ...settings, night: e.target.value === "night" })}><option value="day">Day / vessel appearance</option><option value="night">Night / navigation lights</option></select></label></div>
       <div className="ocean-toolbar-actions"><button aria-expanded={panel === "sensors"} aria-controls="scene-sensors" onClick={() => setPanel(panel === "sensors" ? null : "sensors")}>Sensors <span className="layer-count">{activeLayers}</span></button><button aria-expanded={panel === "settings"} aria-controls="scene-settings" onClick={() => setPanel(panel === "settings" ? null : "settings")}>Settings</button></div>
     </div>
-    <div className="ocean-environment-bar" aria-label="Detection environment"><label><span>Visibility</span><select aria-label="Detection visibility" value={settings.restricted ? "fog" : "clear"} disabled={!!snapshot.collision} onChange={e => onSettings({ ...settings, visibility: e.target.value === "fog" ? 150 : 2000, restricted: e.target.value === "fog" })}><option value="clear">Clear / {rangeText(2000)}</option><option value="fog">Fog / {rangeText(150)}</option></select></label><label><span>Light</span><select aria-label="Detection light conditions" value={settings.night ? "night" : "day"} disabled={!!snapshot.collision} onChange={e => onSettings({ ...settings, night: e.target.value === "night" })}><option value="day">Day / vessel appearance</option><option value="night">Night / navigation lights</option></select></label><span>Scenario: two power-driven vessels / open water / no current</span></div>
     {panel === "sensors" && <section id="scene-sensors" className="ocean-popover ocean-sensors" aria-label="Sensor display options">
       <header><strong>Detection layers</strong><button aria-label="Close sensor options" onClick={() => setPanel(null)}>×</button></header>
       <p>Show observations received by the selected watch.</p>
@@ -446,7 +450,7 @@ export default function OceanScene({ simulation, snapshot, settings, onSettings,
       <header><strong>Scene settings</strong><button aria-label="Close scene settings" onClick={() => setPanel(null)}>×</button></header>
       <label className="ocean-setting-row">Sea state<select aria-label="Sea state" value={seaState} onChange={e => { setSeaState(e.target.value); sea.current = Number(e.target.value); }}><option value="0.15">Calm</option><option value="0.65">Moderate</option><option value="1.2">Rough</option></select></label>
       <div className="ocean-test-signals"><label className="ocean-setting-row">Test signals{sensorView === "observer" ? <select aria-label="Signal sender" value={signalShip} onChange={e => setSignalShip(e.target.value as ShipId)}><option value="own">Ship 01</option><option value="target">Ship 02</option></select> : <span>Ship {transmitter === "own" ? "01" : "02"}</span>}</label><div><button disabled={!!snapshot.collision} onClick={() => onSignal(transmitter, "horn")}>Sound horn</button><button disabled={!!snapshot.collision || !snapshot.bridge.settings.equipment[transmitter].vhf} onClick={() => onSignal(transmitter, "vhf")}>VHF request</button></div><p>Run the simulation to deliver test signals.</p></div>
-      <footer>Radar rings · {rangeText(250)} / {rangeText(500)}<br />Radar range · {rangeText(6000)} &nbsp; ARPA vector · 60 s</footer>
+      <footer>Radar range · {rangeText(6000)}<br />ARPA vector · 60 s</footer>
     </section>}
     {!!activeLayers && <div className="ocean-readouts" aria-label="Sensor view status">{presentation.frames.map(frame => <div className="ocean-watch-readout" key={frame.id}><strong><i style={{ backgroundColor: frame.id === "own" ? "#68e0c3" : "#f7be63" }} />{frame.id === "own" ? "01" : "02"}</strong><div>
       {overlays.visual && <span style={{ color: sensorColors.visual }}>Lookout <b>{frame.visual ? "contact" : "—"}</b></span>}

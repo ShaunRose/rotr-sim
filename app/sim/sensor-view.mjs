@@ -5,7 +5,7 @@ import { KNOT } from "./model.mjs";
 /** @typedef {import('./watchkeeping.mjs').ShipId} ShipId */
 /** @typedef {"observer" | ShipId} SensorView */
 /** @typedef {{ visual: boolean, radar: boolean, arpa: boolean, ais: boolean, sound: boolean, vhf: boolean }} OverlayToggles */
-export const defaultOverlays = { visual: false, radar: false, arpa: false, ais: false, sound: false, vhf: false };
+export const defaultOverlays = { visual: true, radar: true, arpa: false, ais: false, sound: true, vhf: false };
 const ids = /** @type {ShipId[]} */ (["own", "target"]);
 const point = (x, y) => ({ x, y });
 const worldPoint = detection => point(detection.originX + detection.x, detection.originY + detection.y);
@@ -53,6 +53,6 @@ export function sensorPresentation(state, view = "observer", enabled = defaultOv
   return {
     physicalShips: view === "observer" ? ids : [view],
     frames: selected.map(id => sensorFrame(state.bridge[id], state.bridge.settings, state.time, enabled)),
-    emissions: view === "observer" ? state.bridge.emissions.filter(signal => state.time - signal.sent <= 6 && (signal.kind === "horn" ? enabled.sound : enabled.vhf)) : [],
+    emissions: view === "observer" ? state.bridge.emissions.filter(signal => (signal.kind === "horn" ? state.time <= signal.delivery : state.time - signal.sent <= 6) && (signal.kind === "horn" ? enabled.sound : enabled.vhf)) : [],
   };
 }
