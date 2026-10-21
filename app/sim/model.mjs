@@ -28,8 +28,8 @@ export function initialState() {
   return {
     time: 0,
     collision: /** @type {{ time: number } | null} */ (null),
-    own: { x: 360, y: 240, heading: 0, speed: 6, trail: [[360, 240]] },
-    target: { x: 660, y: 540, heading: 270, speed: 6, trail: [[660, 540]] },
+    own: { x: 360, y: 240, heading: 0, speed: 6, rudder: 0, trail: [[360, 240]] },
+    target: { x: 660, y: 540, heading: 270, speed: 6, rudder: 0, trail: [[660, 540]] },
   };
 }
 
@@ -58,13 +58,14 @@ export function advance(state, command, dt) {
   if (hullsOverlap(state.own, state.target)) return { ...state, collision: { time: state.time } };
   const move = (boat, own) => {
     const speed = own ? boat.speed + (command.speed - boat.speed) * (1 - Math.exp(-dt / 4)) : boat.speed;
-    const heading = (boat.heading + (own ? command.rudder / 35 * speed / 12 * 5 * dt : 0) + 360) % 360;
+    const rudder = own ? command.rudder : 0;
+    const heading = (boat.heading + rudder / 35 * speed / 12 * 5 * dt + 360) % 360;
     const angle = heading * Math.PI / 180;
     const x = boat.x + Math.sin(angle) * speed * KNOT * dt;
     const y = boat.y + Math.cos(angle) * speed * KNOT * dt;
     const last = boat.trail[boat.trail.length - 1];
     const trail = Math.hypot(x - last[0], y - last[1]) >= 3 ? [...boat.trail.slice(-299), [x, y]] : boat.trail;
-    return { x, y, heading, speed, trail };
+    return { x, y, heading, speed, rudder, trail };
   };
   const next = { time: state.time + dt, collision: state.collision, own: move(state.own, true), target: move(state.target, false) };
   if (hullsOverlap(next.own, next.target)) next.collision = { time: next.time };

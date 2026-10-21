@@ -107,3 +107,15 @@ test("early starboard maneuver avoids the default collision", () => {
   assert.equal(state.collision, null);
   assert.ok(state.time > 119);
 });
+
+test("vessel state records applied rudder separately from pending helm commands", () => {
+  const before = initialState();
+  const command = { speed: 10, rudder: 20 };
+  assert.equal(before.own.rudder, 0);
+  const after = advance(before, command, STEP);
+  assert.equal(after.own.rudder, 20);
+  assert.equal(after.target.rudder, 0);
+  assert.equal(before.own.rudder, 0);
+  assert.ok(after.own.speed > 6 && after.own.speed < command.speed);
+  assert.equal(after.target.speed, 6);
+});

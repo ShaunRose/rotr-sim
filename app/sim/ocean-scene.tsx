@@ -4,10 +4,17 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { Water } from "three/addons/objects/Water.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { Sky } from "three/addons/objects/Sky.js";
-import { hull, initialState } from "./model.mjs";
+import { rangeText } from "./units.mjs";
+import { sensorColors } from "./sensor-colors";
+import { closedHull } from "./naval-hull.mjs";
+import { hull } from "./model.mjs";
+import { createSimulation, type Settings, type ShipId } from "./watchkeeping.mjs";
+import { sensorPresentation, defaultOverlays, type SensorView, type OverlayToggles } from "./sensor-view.mjs";
+import { createSensorOverlays } from "./sensor-overlays";
 
-type State = ReturnType<typeof initialState>;
+type State = ReturnType<typeof createSimulation>;
 type CameraMode = "follow" | "encounter" | "overhead";
 
 /** A regular swell, shared by the ocean shader and the boat surface sampling. */
@@ -37,11 +44,13 @@ function normalTexture() {
   return texture;
 }
 
-/** Render a launch around the same box hull dimensions used by Vessel.js. */
+/** Keep a lightweight fallback until the local naval GLB finishes loading. */
 function makeBoat(color: number, label: string) {
   const root = new THREE.Group();
   const body = new THREE.Group();
   root.add(body);
+  const visual = new THREE.Group();
+  body.add(visual);
   const paint = new THREE.MeshStandardMaterial({ color, roughness: 0.38, metalness: 0.12 });
   const red = new THREE.MeshStandardMaterial({ color: 0x792e28, roughness: 0.7 });
   const white = new THREE.MeshStandardMaterial({ color: 0xf0efdf, roughness: 0.55 });
@@ -50,7 +59,7 @@ function makeBoat(color: number, label: string) {
   const glass = new THREE.MeshStandardMaterial({ color: 0x254d60, roughness: 0.12, metalness: 0.55 });
   const addBox = (w: number, h: number, d: number, x: number, y: number, z: number, material: THREE.Material) => {
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
-    mesh.position.set(x, y, z); body.add(mesh); return mesh;
+    mesh.position.set(x, y, z); visual.add(mesh); return mesh;
   };
   addBox(hull.beam, hull.draft, hull.length, 0, -hull.draft / 2, 0, red);
   addBox(hull.beam, hull.depth - hull.draft, hull.length, 0, (hull.depth - hull.draft) / 2, 0, paint);
@@ -72,10 +81,10 @@ function makeBoat(color: number, label: string) {
     addBox(0.08, 0.08, 18, side * 2.75, 3.5, 0, white);
     for (const z of [-7, 0, 7]) {
       const tyre = new THREE.Mesh(new THREE.TorusGeometry(0.45, 0.16, 8, 16), dark);
-      tyre.rotation.y = Math.PI / 2; tyre.position.set(side * 3.1, 1.2, z); body.add(tyre);
+      tyre.rotation.y = Math.PI / 2; tyre.position.set(side * 3.1, 1.2, z); visual.add(tyre);
     }
     const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 8), new THREE.MeshBasicMaterial({ color: side > 0 ? 0x36ff88 : 0xff4433 }));
-    lamp.position.set(side * 2.4, 5.3, -4.5); body.add(lamp);
+    lamp.position.set(side * 2.0, 2.0, -2.0); body.add(lamp);
   }
   const canvas = document.createElement("canvas");
   canvas.width = 512; canvas.height = 96;
@@ -88,7 +97,8 @@ function makeBoat(color: number, label: string) {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true }));
-  sprite.position.y = 14; sprite.scale.set(22, 4.1, 1); root.add(sprite);
+  sprite.material.sizeAttenuation = false;
+  sprite.position.y = 10; sprite.scale.set(0.13, 0.024, 1); root.add(sprite);
   const wake = new THREE.Mesh(new THREE.PlaneGeometry(7, 38), new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, side: THREE.DoubleSide,
     vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
@@ -108,16 +118,114 @@ function makeBoat(color: number, label: string) {
   outline.position.y = hull.depth / 2 - hull.draft;
   outline.visible = false;
   body.add(outline);
-  return { root, body, wake, paint, outline };
+  const paints = [paint];
+  const installModel = (model: THREE.Group) => {
+    visual.traverse(object => {
+      if (object instanceof THREE.Mesh) object.geometry.dispose();
+    });
+    const oldMaterials = new Set<THREE.Material>();
+    visual.traverse(object => {
+      if (object instanceof THREE.Mesh) (Array.isArray(object.material) ? object.material : [object.material]).forEach(material => oldMaterials.add(material));
+    });
+    oldMaterials.forEach(material => material.dispose());
+    body.remove(visual);
+    const bounds = new THREE.Box3().setFromObject(model);
+    const size = bounds.getSize(new THREE.Vector3());
+    const center = bounds.getCenter(new THREE.Vector3());
+    // This asset is Y-up with its bow along -Z, matching the simulation.
+    model.scale.set(hull.beam / size.x, hull.length / size.z, hull.length / size.z);
+    // Extract only the upper open boundary of the two library hull panels.
+    // These coordinates are shared with the deck; never stretch that seam.
+    const hullNames = new Set(["nurbsToPoly1", "nurbsToPoly107"]);
+    const rimPoints = new Map<string, THREE.Vector3>();
+    const rimEdges: [string, string][] = [];
+    const key = (p: THREE.Vector3) => [p.x, p.y, p.z].map(value => value.toFixed(4)).join(",");
+    model.traverse(object => {
+      if (!(object instanceof THREE.Mesh) || !hullNames.has(object.name)) return;
+      const positions = object.geometry.getAttribute("position");
+      const index = object.geometry.index!;
+      const edges = new Map<string, { a: number; b: number; count: number }>();
+      for (let i = 0; i < index.count; i += 3) for (let side = 0; side < 3; side++) {
+        const a = index.getX(i + side), b = index.getX(i + (side + 1) % 3);
+        const edgeKey = [Math.min(a, b), Math.max(a, b)].join(",");
+        const edge = edges.get(edgeKey);
+        if (edge) edge.count++; else edges.set(edgeKey, { a, b, count: 1 });
+      }
+      for (const edge of edges.values()) {
+        if (edge.count !== 1) continue;
+        const a = new THREE.Vector3().fromBufferAttribute(positions, edge.a);
+        const b = new THREE.Vector3().fromBufferAttribute(positions, edge.b);
+        // The original deck edge ranges from Y=1.48 aft to Y=1.92 at bow.
+        if (a.y < 1.4799 || b.y < 1.4799) continue;
+        const ka = key(a), kb = key(b);
+        rimPoints.set(ka, a); rimPoints.set(kb, b); rimEdges.push([ka, kb]);
+      }
+      object.visible = false;
+    });
+    const neighbors = new Map<string, string[]>();
+    for (const [a, b] of rimEdges) {
+      neighbors.set(a, [...(neighbors.get(a) ?? []), b]);
+      neighbors.set(b, [...(neighbors.get(b) ?? []), a]);
+    }
+    // Follow the continuous port -> bow -> starboard deck seam. The final
+    // closing segment is the transom, missing from the source asset panels.
+    let current = [...neighbors.keys()].find(id => neighbors.get(id)!.length === 1)!;
+    let previous = "";
+    const rim: THREE.Vector3[] = [];
+    while (current) {
+      rim.push(rimPoints.get(current)!);
+      const next = neighbors.get(current)!.find(id => id !== previous) ?? "";
+      previous = current; current = next;
+    }
+    const deckY = Math.max(...rim.map(p => p.y));
+    model.position.set(-center.x * model.scale.x, hull.depth - hull.draft - deckY * model.scale.y, -center.z * model.scale.z);
+    const solid = closedHull(rim, (-hull.draft - model.position.y) / model.scale.y);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(solid.vertices, 3));
+    geometry.setIndex(solid.indices);
+    const hullMaterial = new THREE.MeshStandardMaterial({ color, roughness: 0.7, side: THREE.DoubleSide });
+    const solidMesh = new THREE.Mesh(geometry.toNonIndexed(), hullMaterial);
+    geometry.dispose(); solidMesh.geometry.computeVertexNormals();
+    solidMesh.name = "Closed naval hull";
+    model.add(solidMesh);
+    const replacements = new Map<THREE.Material, THREE.MeshStandardMaterial>();
+    paints.length = 0;
+    model.traverse(object => {
+      if (!(object instanceof THREE.Mesh)) return;
+      const clonePaint = (material: THREE.MeshStandardMaterial) => {
+        if (!replacements.has(material)) {
+          const copy = material.clone();
+          copy.color.setHex(color);
+          // Preserve visibility of the original thin, single-surface details.
+          copy.side = THREE.DoubleSide;
+          replacements.set(material, copy); paints.push(copy);
+        }
+        return replacements.get(material)!;
+      };
+      object.material = Array.isArray(object.material) ? object.material.map(clonePaint) : clonePaint(object.material);
+    });
+    hullMaterial.dispose();
+    body.add(model);
+  };
+  return { root, body, wake, paints, outline, installModel };
 }
 
 /** Own the WebGL scene independently of the simulation clock. */
-export default function OceanScene({ simulation }: { simulation: RefObject<State> }) {
+export default function OceanScene({ simulation, snapshot, settings, onSettings, onSignal }: { simulation: RefObject<State>; snapshot: State; settings: Settings; onSettings: (settings: Settings) => void; onSignal: (ship: ShipId, kind: "horn" | "vhf") => void }) {
   const container = useRef<HTMLDivElement>(null);
-  const cameraRequest = useRef<{ mode: CameraMode; revision: number }>({ mode: "follow", revision: 0 });
+  const cameraRequest = useRef<{ mode: CameraMode; revision: number }>({ mode: "encounter", revision: 0 });
   const sea = useRef(0.65);
-  const [mode, setMode] = useState<CameraMode>("follow");
+  const [seaState, setSeaState] = useState("0.65");
+  const [mode, setMode] = useState<CameraMode>("encounter");
   const [failure, setFailure] = useState("");
+  const [panel, setPanel] = useState<"sensors" | "settings" | null>(null);
+  const [signalShip, setSignalShip] = useState<ShipId>("own");
+  const [sensorView, setSensorView] = useState<SensorView>("observer");
+  const [overlays, setOverlays] = useState<OverlayToggles>({ ...defaultOverlays });
+  const display = useRef<{ view: SensorView; enabled: OverlayToggles }>({ view: "observer", enabled: { ...defaultOverlays } });
+  const presentation = sensorPresentation(snapshot, sensorView, overlays);
+  const activeLayers = Object.values(overlays).filter(Boolean).length;
+  const transmitter = sensorView === "observer" ? signalShip : sensorView;
   const changeCamera = (next: CameraMode) => {
     setMode(next); cameraRequest.current = { mode: next, revision: cameraRequest.current.revision + 1 };
   };
@@ -184,12 +292,35 @@ export default function OceanScene({ simulation }: { simulation: RefObject<State
         vec2 slope = waveAmplitude * vec2(0.065*cos(phase1) - 0.0133*cos(phase2), 0.025*cos(phase1) + 0.028*cos(phase2));
         vec3 surfaceNormal = normalize(noise.xzy * vec3(0.65, 1.0, 0.65) + vec3(-slope.x, 0.0, -slope.y));`);
     scene.add(water);
-    const own = makeBoat(0x68e0c3, "01 / OWN VESSEL");
+    const own = makeBoat(0x68e0c3, "01 / OWN");
     const target = makeBoat(0xf7be63, "02 / TARGET");
     scene.add(own.root, target.root);
+    let disposed = false;
+    new GLTFLoader().load("/models/naval-battleship.glb", gltf => {
+      const sourceMaterials = new Set<THREE.Material>();
+      gltf.scene.traverse(object => {
+        if (object instanceof THREE.Mesh) (Array.isArray(object.material) ? object.material : [object.material]).forEach(material => sourceMaterials.add(material));
+      });
+      if (!disposed) {
+        const secondModel = gltf.scene.clone(true);
+        own.installModel(gltf.scene);
+        target.installModel(secondModel);
+      } else {
+        gltf.scene.traverse(object => {
+          if (object instanceof THREE.Mesh) object.geometry.dispose();
+        });
+      }
+      // Per-vessel material clones allow independent collision highlighting.
+      sourceMaterials.forEach(material => material.dispose());
+    }, undefined, () => {
+      if (!disposed) setFailure("The naval model could not be loaded. Showing the fallback vessel; reload to retry.");
+    });
     const trailMaterials = [0x68e0c3, 0xf7be63].map(color => new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.35 }));
     const trails = trailMaterials.map(material => new THREE.Line(new THREE.BufferGeometry(), material));
-    scene.add(...trails);
+    const predictionMaterials = [0x68e0c3, 0xf7be63].map(color => new THREE.LineDashedMaterial({ color, transparent: true, opacity: 0.8, dashSize: 7, gapSize: 4 }));
+    const predictions = predictionMaterials.map(material => new THREE.Line(new THREE.BufferGeometry(), material));
+    scene.add(...trails, ...predictions);
+    const sensorOverlays = createSensorOverlays();
     const observer = new ResizeObserver(() => {
       const width = host.clientWidth, height = host.clientHeight;
       renderer.setSize(width, height); camera.aspect = width / Math.max(height, 1); camera.updateProjectionMatrix();
@@ -202,30 +333,39 @@ export default function OceanScene({ simulation }: { simulation: RefObject<State
     const draw = () => {
       const state = simulation.current;
       const time = state.time;
+      const sensorData = sensorPresentation(state, display.current.view, display.current.enabled);
       const amplitude = sea.current;
       water.material.uniforms.time.value = time;
       water.material.uniforms.waveAmplitude.value = amplitude;
       const positions = [toWorld(state.own), toWorld(state.target)];
       [own, target].forEach((mesh, i) => {
+        const shipId = i === 0 ? "own" : "target";
+        mesh.root.visible = sensorData.physicalShips.includes(shipId);
         const boat = i === 0 ? state.own : state.target;
         const p = positions[i];
         const h = boat.heading * Math.PI / 180;
         const sample = (forward: number, side: number) => surface(p.x + Math.sin(h) * forward + Math.cos(h) * side, p.z - Math.cos(h) * forward + Math.sin(h) * side, time, amplitude);
         mesh.root.position.copy(p);
         mesh.root.rotation.y = -h;
-        mesh.body.position.y = sample(0, 0);
+        mesh.body.position.y = sample(0, 0) - 0.5;
         mesh.body.rotation.x = Math.atan2(sample(10, 0) - sample(-10, 0), hull.length);
         mesh.body.rotation.z = Math.atan2(sample(0, 3) - sample(0, -3), hull.beam);
         mesh.wake.position.y = sample(-20, 0) + 0.15;
         mesh.wake.visible = boat.speed > 0.5 && !state.collision;
         mesh.outline.visible = !!state.collision;
-        mesh.paint.emissive.setHex(state.collision ? 0xff3322 : 0x000000);
-        mesh.paint.emissiveIntensity = state.collision ? 0.6 : 0;
+        mesh.paints.forEach(paint => {
+          paint.emissive.setHex(state.collision ? 0xff3322 : 0x000000);
+          paint.emissiveIntensity = state.collision ? 0.6 : 0;
+        });
       });
       const request = cameraRequest.current;
-      focus.copy(request.mode === "follow" ? positions[0] : positions[0].clone().add(positions[1]).multiplyScalar(0.5));
+      const selected = display.current.view === "target" ? 1 : 0;
+      const primary = positions[selected];
+      const observed = sensorData.frames[0]?.knownTarget;
+      const secondary = display.current.view === "observer" ? positions[1] : observed ? new THREE.Vector3(observed.x - 600, 0, 400 - observed.y) : primary;
+      focus.copy(request.mode === "follow" ? primary : primary.clone().add(secondary).multiplyScalar(0.5));
       if (request.revision !== cameraRevision) {
-        const separation = positions[0].distanceTo(positions[1]);
+        const separation = primary.distanceTo(secondary);
         if (request.mode === "follow") camera.position.copy(focus).add(new THREE.Vector3(48, 30, 65));
         else if (request.mode === "overhead") camera.position.copy(focus).add(new THREE.Vector3(0, Math.max(200, separation * 1.5), 2));
         else camera.position.copy(focus).add(new THREE.Vector3(Math.max(110, separation * 0.65), Math.max(95, separation * 0.65), Math.max(130, separation * 0.85)));
@@ -234,20 +374,43 @@ export default function OceanScene({ simulation }: { simulation: RefObject<State
         const delta = focus.clone().sub(previousFocus);
         camera.position.add(delta); controls.target.add(delta); previousFocus.copy(focus);
       }
+      trails.forEach((trail, i) => { trail.visible = sensorData.physicalShips.includes(i === 0 ? "own" : "target"); });
+      predictions.forEach((prediction, i) => { prediction.visible = sensorData.physicalShips.includes(i === 0 ? "own" : "target") && !state.collision; });
       if (Math.abs(time - lastTrailTime) >= 0.25 || time < lastTrailTime) {
         [state.own, state.target].forEach((boat, i) => {
           const points = boat.trail.map(([x, y]) => new THREE.Vector3(x - 600, surface(x - 600, 400 - y, time, amplitude) + 0.2, 400 - y));
           const old = trails[i].geometry;
           trails[i].geometry = new THREE.BufferGeometry().setFromPoints(points); old.dispose();
+          const projected: THREE.Vector3[] = [];
+          let x = boat.x, y = boat.y, heading = boat.heading;
+          for (let step = 0; step <= 60; step++) {
+            projected.push(new THREE.Vector3(x - 600, surface(x - 600, 400 - y, time, amplitude) + 0.28, 400 - y));
+            const dt = 1;
+            const radians = heading * Math.PI / 180;
+            x += Math.sin(radians) * boat.speed * 0.514444 * dt;
+            y += Math.cos(radians) * boat.speed * 0.514444 * dt;
+            heading = (heading + boat.rudder / 35 * boat.speed / 12 * 5 * dt + 360) % 360;
+          }
+          const projectedGeometry = new THREE.BufferGeometry().setFromPoints(projected);
+          const oldPrediction = predictions[i].geometry;
+          predictions[i].geometry = projectedGeometry;
+          predictions[i].computeLineDistances();
+          oldPrediction.dispose();
         });
         lastTrailTime = time;
       }
       controls.update(); renderer.render(scene, camera);
+      sensorOverlays.update(sensorData, time);
+      renderer.autoClear = false;
+      renderer.clearDepth();
+      renderer.render(sensorOverlays.scene, camera);
+      renderer.autoClear = true;
       frame = requestAnimationFrame(draw);
     };
     draw();
     return () => {
-      cancelAnimationFrame(frame); observer.disconnect(); controls.dispose();
+      disposed = true;
+      cancelAnimationFrame(frame); observer.disconnect(); controls.dispose(); sensorOverlays.dispose();
       renderer.domElement.removeEventListener("webglcontextlost", contextLost);
       const materials = new Set<THREE.Material>();
       scene.traverse(object => {
@@ -265,13 +428,35 @@ export default function OceanScene({ simulation }: { simulation: RefObject<State
     };
   }, [simulation]);
 
-  return <div className="ocean-scene">
+  return <div className="ocean-scene" onKeyDown={event => { if (event.key === "Escape") setPanel(null); }}>
     <div className="ocean-canvas" ref={container} />
-    <div className="scene-controls" aria-label="3D camera controls">
-      {(["follow", "encounter", "overhead"] as const).map(camera => <button key={camera} aria-pressed={mode === camera} onClick={() => changeCamera(camera)}>{camera === "follow" ? "Follow vessel" : camera === "encounter" ? "Both vessels" : "Overhead"}</button>)}
-      <label>Sea <select aria-label="Sea state" defaultValue="0.65" onChange={e => { sea.current = Number(e.target.value); }}><option value="0.15">Calm</option><option value="0.65">Moderate</option><option value="1.2">Rough</option></select></label>
+    <div className="ocean-toolbar" aria-label="Simulation view controls">
+      <label><span>View</span><select aria-label="Sensor view" value={sensorView} onChange={e => { const view = e.target.value as SensorView; setSensorView(view); display.current = { ...display.current, view }; changeCamera("encounter"); }}><option value="observer">Observer · both ships</option><option value="own">Ship 01 · sensors</option><option value="target">Ship 02 · sensors</option></select></label>
+      <label><span>Camera</span><select aria-label="Camera view" value={mode} onChange={e => changeCamera(e.target.value as CameraMode)}><option value="encounter">Overview</option><option value="follow">Follow vessel</option><option value="overhead">Overhead</option></select></label>
+      <div className="ocean-toolbar-actions"><button aria-expanded={panel === "sensors"} aria-controls="scene-sensors" onClick={() => setPanel(panel === "sensors" ? null : "sensors")}>Sensors <span className="layer-count">{activeLayers}</span></button><button aria-expanded={panel === "settings"} aria-controls="scene-settings" onClick={() => setPanel(panel === "settings" ? null : "settings")}>Settings</button></div>
     </div>
-    <div className="scene-caption"><span className="scene-live-dot" /> 3D OCEAN <span>Drag to orbit / Scroll to zoom / Right-drag to pan</span></div>
+    <div className="ocean-environment-bar" aria-label="Detection environment"><label><span>Visibility</span><select aria-label="Detection visibility" value={settings.restricted ? "fog" : "clear"} disabled={!!snapshot.collision} onChange={e => onSettings({ ...settings, visibility: e.target.value === "fog" ? 150 : 2000, restricted: e.target.value === "fog" })}><option value="clear">Clear / {rangeText(2000)}</option><option value="fog">Fog / {rangeText(150)}</option></select></label><label><span>Light</span><select aria-label="Detection light conditions" value={settings.night ? "night" : "day"} disabled={!!snapshot.collision} onChange={e => onSettings({ ...settings, night: e.target.value === "night" })}><option value="day">Day / vessel appearance</option><option value="night">Night / navigation lights</option></select></label><span>Scenario: two power-driven vessels / open water / no current</span></div>
+    {panel === "sensors" && <section id="scene-sensors" className="ocean-popover ocean-sensors" aria-label="Sensor display options">
+      <header><strong>Detection layers</strong><button aria-label="Close sensor options" onClick={() => setPanel(null)}>×</button></header>
+      <p>Show observations received by the selected watch.</p>
+      <div className="ocean-layer-grid">{(Object.keys(defaultOverlays) as (keyof OverlayToggles)[]).map(key => <label key={key}><span className="sensor-swatch" style={{ backgroundColor: sensorColors[key] }} /><span>{key === "visual" ? "Lookout" : key === "sound" ? "Sound" : key.toUpperCase()}</span><input style={{ accentColor: sensorColors[key] }} type="checkbox" checked={overlays[key]} aria-label={`${key === "arpa" ? "ARPA" : key === "ais" ? "AIS" : key === "vhf" ? "VHF" : key} overlay`} onChange={e => { const enabled = { ...overlays, [key]: e.target.checked }; setOverlays(enabled); display.current = { ...display.current, enabled }; }} /></label>)}</div>
+      <footer>Circle · radar &nbsp; Triangle · AIS<br />Dashed line · ARPA estimate &nbsp; Solid line · lookout</footer>
+    </section>}
+    {panel === "settings" && <section id="scene-settings" className="ocean-popover ocean-settings" aria-label="Scene settings">
+      <header><strong>Scene settings</strong><button aria-label="Close scene settings" onClick={() => setPanel(null)}>×</button></header>
+      <label className="ocean-setting-row">Sea state<select aria-label="Sea state" value={seaState} onChange={e => { setSeaState(e.target.value); sea.current = Number(e.target.value); }}><option value="0.15">Calm</option><option value="0.65">Moderate</option><option value="1.2">Rough</option></select></label>
+      <div className="ocean-test-signals"><label className="ocean-setting-row">Test signals{sensorView === "observer" ? <select aria-label="Signal sender" value={signalShip} onChange={e => setSignalShip(e.target.value as ShipId)}><option value="own">Ship 01</option><option value="target">Ship 02</option></select> : <span>Ship {transmitter === "own" ? "01" : "02"}</span>}</label><div><button disabled={!!snapshot.collision} onClick={() => onSignal(transmitter, "horn")}>Sound horn</button><button disabled={!!snapshot.collision || !snapshot.bridge.settings.equipment[transmitter].vhf} onClick={() => onSignal(transmitter, "vhf")}>VHF request</button></div><p>Run the simulation to deliver test signals.</p></div>
+      <footer>Radar rings · {rangeText(250)} / {rangeText(500)}<br />Radar range · {rangeText(6000)} &nbsp; ARPA vector · 60 s</footer>
+    </section>}
+    {!!activeLayers && <div className="ocean-readouts" aria-label="Sensor view status">{presentation.frames.map(frame => <div className="ocean-watch-readout" key={frame.id}><strong><i style={{ backgroundColor: frame.id === "own" ? "#68e0c3" : "#f7be63" }} />{frame.id === "own" ? "01" : "02"}</strong><div>
+      {overlays.visual && <span style={{ color: sensorColors.visual }}>Lookout <b>{frame.visual ? "contact" : "—"}</b></span>}
+      {overlays.radar && <span style={{ color: sensorColors.radar }}>Radar <b>{frame.radar ? `${frame.radar.age.toFixed(1)}s` : "—"}</b></span>}
+      {overlays.arpa && <span style={{ color: sensorColors.arpa }}>ARPA <b>{frame.prediction ? `CPA ${rangeText(frame.prediction.dcpa)}` : "acquiring"}</b></span>}
+      {overlays.ais && <span style={{ color: sensorColors.ais }}>AIS <b>{frame.ais ? `${frame.ais.age.toFixed(1)}s old` : "—"}</b></span>}
+      {overlays.sound && <span style={{ color: sensorColors.sound }}>Sound <b>{frame.hearing.length ? "heard" : "—"}</b></span>}
+      {overlays.vhf && <span style={{ color: sensorColors.vhf }}>VHF <b>{frame.vhf.length ? "received" : "—"}</b></span>}
+    </div></div>)}</div>}
+    <div className="ocean-footer"><span>{sensorView === "observer" ? "Observer" : `Ship ${sensorView === "own" ? "01" : "02"} · received observations`}<span className="ocean-gesture-hint"> · Drag to orbit · Scroll to zoom</span></span><a href="https://poly.pizza/m/cqV6mUkn7Ow" target="_blank" rel="noreferrer" title="Battleship model by angelo raffaele Catalano, CC BY 3.0">Model: angelo raffaele Catalano · CC BY 3.0</a></div>
     {failure && <div className="graphics-error" role="alert">{failure}</div>}
   </div>;
 }

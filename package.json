@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --test app/sim/model.test.mjs"
+    "test": "node --test app/sim/*.test.mjs"
   },
   "dependencies": {
     "next": "16.4.2",
